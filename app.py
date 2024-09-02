@@ -1,11 +1,14 @@
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 import json
+from flask_cors import CORS
+from sqlalchemy import func
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+CORS(app)
 db = SQLAlchemy(app)
 
 # Define the database models
@@ -41,7 +44,8 @@ class Recipe(db.Model):
     prep_time = db.Column(db.String(50))
     difficulty_level = db.Column(db.String(50))
     spice_level = db.Column(db.String(50))
-    ingredients = db.Column(db.Text)  # Will store ingredients as JSON string
+    ingredients = db.Column(db.Text) 
+    # Will store ingredients as JSON string
 
 # Create the database tables
 with app.app_context():
@@ -69,13 +73,20 @@ def load_combined_data():
                 assignment_link=item['Assignment_Link']
             )
             db.session.add(announcement)
-        db.session.commit()
+            db.session.commit()
 
 def load_source_data():
     with open('source.json') as f:
         data = json.load(f)
         for item in data:
+            # Check for duplicates based on recipe_name and recipe_url
+            existing_recipe = Recipe.query.filter_by(recipe_name=item['recipe_name'], recipe_url=item['recipe_url']).first()
+            if existing_recipe:
+                print(f"Recipe '{item['recipe_name']}' already exists.")
+                continue  # Skip adding duplicates
+
             recipe = Recipe(
+                id=generate_unique_id(),  # Assign a unique ID
                 recipe_name=item['recipe_name'],
                 recipe_photo=item['recipe_photo'],
                 recipe_url=item['recipe_url'],
@@ -88,9 +99,24 @@ def load_source_data():
                 prep_time=item['Prep_Time'],
                 difficulty_level=item['Difficulty_Level'],
                 spice_level=item['Spice_Level'],
-                ingredients=json.dumps(item['Ingredients'])  # Store as JSON string
+                ingredients=item['Ingredients'] 
             )
             db.session.add(recipe)
+            db.session.commit()
+
+def generate_unique_id():
+    """Generates a unique ID for a recipe."""
+    import uuid
+    return str(uuid.uuid4())
+
+def delete_duplicates():
+    """Deletes duplicate recipes based on recipe_name and recipe_url."""
+    duplicate_recipes = Recipe.query.having(func.count(Recipe.id) > 1).group_by(Recipe.recipe_name, Recipe.recipe_url).all()
+    for recipe in duplicate_recipes:
+        # Delete all but one duplicate
+        duplicates_to_delete = Recipe.query.filter_by(recipe_name=recipe.recipe_name, recipe_url=recipe.recipe_url).offset(1).all()
+        for duplicate in duplicates_to_delete:
+            db.session.delete(duplicate)
         db.session.commit()
 
 # Root route
@@ -120,7 +146,6 @@ def get_announcements():
         'teacher': a.teacher,
         'course': a.course,
         'assignment_link': a.assignment_link
-        # Add other fields as needed
     } for a in announcements])
 
 @app.route('/recipes', methods=['GET'])
@@ -130,8 +155,16 @@ def get_recipes():
         'id': r.id,
         'recipe_name': r.recipe_name,
         'recipe_url': r.recipe_url,
-        
-        # Add other fields as needed
+        'calories': r.calories,
+        'net_carbs': r.net_carbs,
+        'fat': r.fat,
+        'protein': r.protein,
+        'sodium': r.sodium,
+        'prep_time': r.prep_time,
+        'difficulty_level': r.difficulty_level,
+        'spice_level': r.spice_level,
+        'carbohydrates': r.carbohydrates,
+        'ingredients': json.loads(r.ingredients)
     } for r in recipes])
 
 if __name__ == '__main__':
@@ -139,4 +172,5 @@ if __name__ == '__main__':
         # Load data into the database
         load_combined_data()
         load_source_data()
+        delete_duplicates()  # Delete duplicates after loading data
     app.run(debug=True)
